@@ -317,6 +317,7 @@ static void GUI_ListGames(void)
 {
 	GUI_Clear();
 	printf("\n Supported Games (NTSC Only)\t\tGame IDs     Mouse Support\n%s\n\n", LINE);
+	printf("    007: Agent Under Fire\t\t GW7E69\t\t Good\n\n");
 	printf("    TimeSplitters 2\t\t\t GTSE4F\t\t Fair\n\n");
 	printf("    TimeSplitters: Future Perfect\t G3FE69\t\t Poor\n\n");
 	printf("    007: NightFire\t\t\t GO7E69\t\t Poor\n\n");

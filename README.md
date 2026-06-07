@@ -49,6 +49,7 @@ avoid clicking off the window.
 ## Supported Dolphin Titles (NTSC Only)
 | Game Title | Mouse Support | Issues |
 | --- | :---: | ----------- |
+| 007: Agent Under Fire | Good | <sup>USA rev00/rev01 supported; on-rails/tank levels not fully tested</sub> |
 | 007: NightFire | Poor | <sup>Vehicle mode is semi-functional - last level is broken</sub> |
 | Call of Duty 2: Big Red One | Good | <sup>None</sub> |
 | Die Hard: Vendetta | Fair | <sup>Sentry mode not supported</sub> |
