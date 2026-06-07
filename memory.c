@@ -326,7 +326,7 @@ uint8_t MEM_FindRamOffset(void)
 
 	while (VirtualQueryEx(emuhandle, gamecube_ptr, &info, sizeof(info))) // loop continues until we reach the last possible memory region
 	{
-		gamecube_ptr = info.BaseAddress + info.RegionSize; // update address to next region of memory for loop
+		gamecube_ptr = (uint8_t *)info.BaseAddress + info.RegionSize; // update address to next region of memory for loop
 
 		// set region size to look for based on the emulator detected
 		uint32_t emuRegionSize = 0x2000000; // Dolphin
