@@ -59,15 +59,26 @@ const GAMEDRIVER *GAME_GC_007AGENTUNDERFIRE = &GAMEDRIVER_INTERFACE;
 
 static uint32_t aimLockBase = 0;
 static float scale = 5.f;
+static uint32_t revisionAddressDelta = 0;
+
+static uint32_t AUF_Addr(const uint32_t addr)
+{
+	return addr + revisionAddressDelta;
+}
 
 //==========================================================================
 // Purpose: return 1 if game is detected
 //==========================================================================
 static uint8_t GC_AUF_Status(void)
 {
-	// GW7E69
-	return (MEM_ReadUInt(0x80000000) == 0x47573745U && 
-			MEM_ReadUInt(0x80000004) == 0x36390000U);
+	const uint32_t gameCode = MEM_ReadUInt(0x80000000);
+	const uint32_t makerDiscRevision = MEM_ReadUInt(0x80000004);
+
+	revisionAddressDelta = (makerDiscRevision & 0xFFU) == 0x01U ? 0x100U : 0x0U;
+
+	// GW7E69: 007 Agent Under Fire (USA), rev00/rev01.
+	return (gameCode == 0x47573745U &&
+			(makerDiscRevision == 0x36390000U || makerDiscRevision == 0x36390001U));
 }
 
 //==========================================================================
@@ -83,7 +94,7 @@ static void GC_AUF_Inject(void)
 	// 	return;
 
 	if (aimLockBase == 0)
-		aimLockBase = MEM_ReadUInt(AUF_AIMLOCK_BASE_PTR);
+		aimLockBase = MEM_ReadUInt(AUF_Addr(AUF_AIMLOCK_BASE_PTR));
 	
 	if (MEM_ReadUInt(aimLockBase + AUF_AIMLOCK_SANITY) == AUF_AIMLOCK_SANITY_VALUE)
 	{
@@ -91,17 +102,19 @@ static void GC_AUF_Inject(void)
 		MEM_WriteUInt(aimLockBase + AUF_AIMLOCK_TOGGLE, 0x0);
 	}
 	else {
-		aimLockBase = MEM_ReadUInt(AUF_AIMLOCK_BASE_PTR);
+		aimLockBase = MEM_ReadUInt(AUF_Addr(AUF_AIMLOCK_BASE_PTR));
 	}
+
+	const float looksensitivity = (float)sensitivity / 40.f;
+	float fov = MEM_ReadFloat(AUF_Addr(AUF_ONFOOT_FOV));
+	const uint32_t rawCamY = MEM_ReadUInt(AUF_Addr(AUF_ONFOOT_CAMY));
+	const uint32_t rawCamX = MEM_ReadUInt(AUF_Addr(AUF_ONFOOT_CAMX));
 
 	if(xmouse == 0 && ymouse == 0) // if mouse is idle
 		return;
 
-	const float looksensitivity = (float)sensitivity / 40.f;
-	float fov = MEM_ReadFloat(AUF_ONFOOT_FOV);
 
-
-	if (!MEM_ReadUInt(AUF_ONFOOT_CAMY) && !MEM_ReadUInt(AUF_ONFOOT_CAMX))
+	if (!rawCamY && !rawCamX)
 	{
 		// onRails (probably not a good sanity check for tank levels)
 		float scale = 1400;
@@ -126,13 +139,13 @@ static void GC_AUF_Inject(void)
 	else
 	{
 		// onFoot	
-		float camY = MEM_ReadFloat(AUF_ONFOOT_CAMY);
-		float camX = MEM_ReadFloat(AUF_ONFOOT_CAMX);
+		float camY = MEM_ReadFloat(AUF_Addr(AUF_ONFOOT_CAMY));
+		float camX = MEM_ReadFloat(AUF_Addr(AUF_ONFOOT_CAMX));
 
 		camX -= (float)xmouse * looksensitivity * (fov / 60.f) / scale;
 		camY += (float)(invertpitch ? -ymouse : ymouse) * looksensitivity * (fov / 60.f) / scale;
 
-		MEM_WriteFloat(AUF_ONFOOT_CAMX, camX);
-		MEM_WriteFloat(AUF_ONFOOT_CAMY, camY);
+		MEM_WriteFloat(AUF_Addr(AUF_ONFOOT_CAMX), camX);
+		MEM_WriteFloat(AUF_Addr(AUF_ONFOOT_CAMY), camY);
 	}
 }
