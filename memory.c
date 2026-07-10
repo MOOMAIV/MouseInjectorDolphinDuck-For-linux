@@ -1,1223 +1,966 @@
 //==========================================================================
-// Mouse Injector for Dolphin
+// Mouse Injector for Dolphin - Linux Port
 //==========================================================================
 // Copyright (C) 2019-2020 Carnivorous
+// Linux port (C) 2024 - ported from Windows using /proc + process_vm_readv
 // All rights reserved.
 //
 // Mouse Injector is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the Free
 // Software Foundation; either version 2 of the License, or (at your option)
 // any later version.
-//
-// This program is distributed in the hope that it will be useful, but
-// WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-// or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
-// for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, visit http://www.gnu.org/licenses/gpl-2.0.html
 //==========================================================================
-#include <stdio.h> // for text file debug output
+/* _GNU_SOURCE set by Makefile -D flag */
+#include <stdio.h>
 #include <stdint.h>
-#include <windows.h>
-#include <tlhelp32.h>
-#include <psapi.h>
-#include <tchar.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <sys/uio.h>   /* process_vm_readv / process_vm_writev */
 #include "main.h"
 #include "memory.h"
 
-static uint64_t emuoffset = 0;
-static uint32_t aramoffset = 0x02000000; // REQUIRES that MMU is off
-static HANDLE emuhandle = NULL;
-static int isPS1handle = 0;
-static int isN64handle = 0;
-static int isMupenhandle = 0;
-static int isBizHawkhandle = 0;
-static int isBSNEShandle = 0;
-static int isPcsx2handle = 0;
+/* -----------------------------------------------------------------------
+ * Internal state – Linux equivalent of HANDLE emuhandle
+ * -------------------------------------------------------------------- */
+static uint64_t emuoffset   = 0;
+static uint32_t aramoffset  = 0x02000000;
+static pid_t    emupid      = -1;
+
+static int isPS1handle       = 0;
+static int isN64handle       = 0;
+static int isDolphinHandle   = 0;
+static int isMupenhandle     = 0;
+static int isBSNEShandle     = 0;
+static int isPcsx2handle     = 0;
 static int isRetroArchHandle = 0;
-static int isKronosHandle = 0;
-static int isBeetlePSXHandle = 0;
-static int isFlycastHandle = 0;
-static int isBizHawkSNESHandle = 0;
+static int isKronosHandle    = 0;
+static int isFlycastHandle   = 0;
 static int isBSNESMercuryHandle = 0;
-static int isMesenHandle = 0;
-static int isRPCS3Handle = 0;
-static int isPPSSPPHandle = 0;
-static int isBizHawkGenesisHandle = 0;
-static int isBizHawkSaturnHandle = 0;
-static int isBizHawkPlayStationHandle = 0;
-static int isNOMONEYPSXHandle = 0;
-static int isProject64Handle = 0;
+static int isRPCS3Handle     = 0;
+static int isPPSSPPHandle    = 0;
+static int isProject64Handle = 0;   /* via Wine only */
+
 char hookedEmulatorName[80];
 
-uint8_t MEM_Init(void);
-void MEM_Quit(void);
-void MEM_UpdateEmuoffset(void);
-int32_t MEM_ReadInt(const uint32_t addr);
-uint32_t MEM_ReadUInt(const uint32_t addr);
-uint16_t MEM_ReadUInt16(const uint32_t addr);
-uint8_t MEM_ReadUInt8(const uint32_t addr);
-float MEM_ReadFloat(const uint32_t addr);
-void MEM_WriteInt(const uint32_t addr, int32_t value);
-void MEM_WriteUInt(const uint32_t addr, uint32_t value);
-void MEM_WriteFloat(const uint32_t addr, float value);
-static void MEM_ByteSwap32(uint32_t *input);
-static void MEM_ByteSwap64(uint64_t *input);
-
-int32_t ARAM_ReadInt(const uint32_t addr);
-uint32_t ARAM_ReadUInt(const uint32_t addr);
-float ARAM_ReadFloat(const uint32_t addr);
-void ARAM_WriteUInt(const uint32_t addr, uint32_t value);
-void ARAM_WriteFloat(const uint32_t addr, float value);
-
-uint32_t PS1_MEM_ReadPointer(const uint32_t addr);
-uint32_t PS1_MEM_ReadWord(const uint32_t addr);
-uint32_t PS1_MEM_ReadUInt(const uint32_t addr);
-int32_t PS1_MEM_ReadInt(const uint32_t addr);
-int16_t PS1_MEM_ReadInt16(const uint32_t addr);
-uint16_t PS1_MEM_ReadHalfword(const uint32_t addr);
-uint8_t PS1_MEM_ReadByte(const uint32_t addr);
-void PS1_MEM_WriteInt(const uint32_t addr, int32_t value);
-void PS1_MEM_WriteInt16(const uint32_t addr, int16_t value);
-void PS1_MEM_WriteWord(const uint32_t addr, uint32_t value);
-void PS1_MEM_WriteHalfword(const uint32_t addr, uint16_t value);
-void PS1_MEM_WriteByte(const uint32_t addr, uint8_t value);
-// static void MEM_ByteSwap16(uint16_t *input);
-
-uint32_t N64_MEM_ReadUInt(const uint32_t addr);
-int16_t N64_MEM_ReadInt16(const uint32_t addr);
-float N64_MEM_ReadFloat(const uint32_t addr);
-void N64_MEM_WriteFloat(const uint32_t addr, float value);
-void N64_MEM_WriteUInt(const uint32_t addr, uint32_t value);
-void N64_MEM_WriteInt16(const uint32_t addr, int16_t value);
-void N64_MEM_WriteByte(const uint32_t addr, uint8_t value);
-
-uint8_t SNES_MEM_ReadByte(const uint32_t addr);
-uint16_t SNES_MEM_ReadWord(const uint32_t addr);
-void SNES_MEM_WriteByte(const uint32_t addr, uint8_t value);
-void SNES_MEM_WriteWord(const uint32_t addr, uint16_t value);
-
-uint32_t PS2_MEM_ReadPointer(const uint32_t addr);
-uint32_t PS2_MEM_ReadWord(const uint32_t addr);
-uint32_t PS2_MEM_ReadUInt(const uint32_t addr);
-uint32_t PS2_MEM_ReadUInt16(const uint32_t addr);
-int16_t PS2_MEM_ReadInt16(const uint32_t addr);
-uint8_t PS2_MEM_ReadUInt8(const uint32_t addr);
-float PS2_MEM_ReadFloat(const uint32_t addr);
-void PS2_MEM_WriteWord(const uint32_t addr, uint32_t value);
-void PS2_MEM_WriteUInt(const uint32_t addr, uint32_t value);
-void PS2_MEM_WriteUInt16(const uint32_t addr, uint16_t value);
-void PS2_MEM_WriteInt16(const uint32_t addr, int16_t value);
-void PS2_MEM_WriteFloat(const uint32_t addr, float value);
-
-uint32_t SD_MEM_ReadWord(const uint32_t addr);
-float SD_MEM_ReadFloat(const uint32_t addr);
-void SD_MEM_WriteFloat(const uint32_t addr, float value);
-
-uint32_t PS3_MEM_ReadUInt(const uint32_t addr);
-float PS3_MEM_ReadFloat(const uint32_t addr);
-uint32_t PS3_MEM_ReadPointer(const uint32_t addr);
-void PS3_MEM_WriteFloat(const uint32_t addr, float value);
-
-uint32_t PSP_MEM_ReadWord(const uint32_t addr);
-uint32_t PSP_MEM_ReadPointer(const uint32_t addr);
-uint32_t PSP_MEM_ReadUInt(const uint32_t addr);
-uint16_t PSP_MEM_ReadUInt16(const uint32_t addr);
-float PSP_MEM_ReadFloat(const uint32_t addr);
-void PSP_MEM_WriteUInt16(const uint32_t addr, uint16_t value);
-void PSP_MEM_WriteFloat(const uint32_t addr, float value);
-
-void printdebug(uint32_t val);
-
-//==========================================================================
-// Purpose: initialize dolphin handle and setup for memory injection
-// Changed Globals: emuhandle
-//==========================================================================
-uint8_t MEM_Init(void)
-{
-	emuhandle = NULL;
-	HANDLE processes; // will store a snapshot of all processes
-	PROCESSENTRY32 pe32; // stores basic info of a process, using this one to read the ProcessID from
-	processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); // make process snapshot
-	pe32.dwSize = sizeof(PROCESSENTRY32); // correct size
-	Process32First(processes, &pe32); // read info about the first process into pe32
-	do // loop to find emulator
-	{
-		if(strcmp(pe32.szExeFile, "Dolphin.exe") == 0) // if dolphin was found
-		{
-			strcpy(hookedEmulatorName, "Dolphin");
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "duckstation-qt-x64-ReleaseLTCG.exe") == 0) // if DuckStation was found
-		{
-			strcpy(hookedEmulatorName, "DuckStation");
-			isPS1handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "EmuHawk.exe") == 0) // if EmuHawk was found, 2.8 oldest tested working - 2.9 not supported
-		{
-			// strcpy(hookedEmulatorName, "BizHawk N64");
-			strcpy(hookedEmulatorName, "BizHawk - No core loaded");
-			// isN64handle = 1;
-			isBizHawkhandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "RMG.exe") == 0) // if simple64 was found
-		{
-			strcpy(hookedEmulatorName, "Rosalie's Mupen GUI");
-			isN64handle = 1;
-			isMupenhandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "simple64-gui.exe") == 0) // if simple64 was found
-		{
-			strcpy(hookedEmulatorName, "simple64");
-			isN64handle = 1;
-			isMupenhandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "retroarch.exe") == 0) // if retroarch was found, for N64 games using Mupen64Plus-Next
-		{
-			strcpy(hookedEmulatorName, "RetroArch - No core loaded");
-			isRetroArchHandle = 1;
-			// isN64handle = 1;
-			// isMupenhandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "bsnes.exe") == 0) // if BSNES was found
-		{
-			strcpy(hookedEmulatorName, "BSNES");
-			isBSNEShandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		//TODO: condense all pcsx2 checks down to one
-		if(strcmp(pe32.szExeFile, "pcsx2-qtx64-avx2.exe") == 0) // if pcsx2 was found
-		{
-			strcpy(hookedEmulatorName, "pcsx2-qtx64-avx2");
-			isPcsx2handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "pcsx2-qtx64.exe") == 0) // if pcsx2 was found
-		{
-			strcpy(hookedEmulatorName, "pcsx2-qtx64");
-			isPcsx2handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "pcsx2-qt.exe") == 0) // if pcsx2 was found
-		{
-			strcpy(hookedEmulatorName, "pcsx2-qt");
-			isPcsx2handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "flycast.exe") == 0) 
-		{
-			strcpy(hookedEmulatorName, "Flycast");
-			isFlycastHandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "rpcs3.exe") == 0) 
-		{
-			strcpy(hookedEmulatorName, "RPCS3");
-			isRPCS3Handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "PPSSPPWindows.exe") == 0 || strcmp(pe32.szExeFile, "PPSSPPWindows64.exe") == 0) 
-		{
-			strcpy(hookedEmulatorName, "PPSSPP");
-			isPPSSPPHandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "NO$PSX.EXE") == 0) 
-		{
-			strcpy(hookedEmulatorName, "NO$PSX");
-			isNOMONEYPSXHandle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-		if(strcmp(pe32.szExeFile, "Project64.exe") == 0) 
-		{
-			strcpy(hookedEmulatorName, "Project64");
-			isProject64Handle = 1;
-			emuhandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
-			break;
-		}
-	}
-	while(Process32Next(processes, &pe32)); // loop continued until Process32Next deliver NULL or its interrupted with the "break" above
-	CloseHandle(processes);
-	return (emuhandle != NULL);
-}
-//==========================================================================
-// Purpose: close emuhandle safely
-// Changed Globals: emuhandle
-//==========================================================================
-void MEM_Quit(void)
-{
-	if(emuhandle != NULL)
-		CloseHandle(emuhandle);
-}
-//==========================================================================
-// Purpose: update emuoffset pointer to location of gamecube memory
-// Changed Globals: emuoffset
-//==========================================================================
-uint8_t MEM_FindRamOffset(void)
-{
-	emuoffset = 0;
-
-	MEMORY_BASIC_INFORMATION info; // store a snapshot of memory information
-
-	PVOID gamecube_ptr = NULL;
-
-	uint32_t lastRegionSize = 0;
-	uint32_t lastlastRegionSize = 0;
-
-	// if (strcmp(hookedEmulatorName, "DuckStation") == 0)
-	// {
-	// 	uint64_t output; // temp var
-	// 	// UINT_PTR addr = 0x7FF6A3B80000;
-
-	// 	HMODULE hMods[1024];
-	// 	DWORD cbNeeded;
-	// 	unsigned int i;
-	// 	UINT_PTR addr;
-
-	// 	if (EnumProcessModules(emuhandle, hMods, sizeof(hMods), &cbNeeded))
-	// 	{
-	// 		for (i = 0; i < (cbNeeded / sizeof(HMODULE)); i++)
-	// 		{
-	// 			TCHAR szModName[MAX_PATH];
-
-	// 			if (GetModuleBaseName(emuhandle, hMods[i], szModName,
-	// 									sizeof(szModName) / sizeof(TCHAR)))
-	// 			{
-	// 				if (strcmp(szModName, "duckstation-qt-x64-ReleaseLTCG.exe") == 0)
-	// 				{
-	// 					MODULEINFO modinfo;
-
-	// 					if (GetModuleInformation(emuhandle, hMods[i], &modinfo, sizeof(modinfo)))
-	// 					{
-	// 						memcpy(&addr, &(modinfo.lpBaseOfDll), sizeof(modinfo.lpBaseOfDll));
-	// 					}
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-
-	// 	// UINT_PTR addr = (UINT_PTR)GetModuleHandle("duckstation-qt-x64-ReleaseLTCG.exe");
-	// 	uint64_t offset = 0x7E16C0;
-	// 	// uint64_t offset = 0x84A720;
-	// 	ReadProcessMemory(emuhandle, (LPVOID)(addr + offset), &output, sizeof(output), NULL);
-	// 	emuoffset = output;
-	// 	return (emuoffset != 0x0);
-	// }
-
-	while (VirtualQueryEx(emuhandle, gamecube_ptr, &info, sizeof(info))) // loop continues until we reach the last possible memory region
-	{
-		gamecube_ptr = (uint8_t *)info.BaseAddress + info.RegionSize; // update address to next region of memory for loop
-
-		// set region size to look for based on the emulator detected
-		uint32_t emuRegionSize = 0x2000000; // Dolphin
-		if (isBizHawkhandle == 1) {
-			char bizHawkTitle[255];
-			HWND foreground = GetForegroundWindow();
-			int a = GetWindowText(foreground, bizHawkTitle, 256);
-
-			// check window title for loaded core
-			if (strstr(bizHawkTitle, "SNES") != NULL) {
-				strcpy(hookedEmulatorName, "BizHawk SNES");
-				// SNES region size is not static but region before is? (size: 0x19E000?)
-				emuRegionSize = 0x1E000;
-				// emuRegionSize = 0x19000;
-				// emuRegionSize = 0x13000;
-				isBizHawkSNESHandle = 1;
-			}
-			else if (strstr(bizHawkTitle, "Nintendo 64") != NULL) {
-				strcpy(hookedEmulatorName, "BizHawk N64");
-				emuRegionSize = 0x22D0000; 	// BizHawk 2.8 (Mupen64Plus)
-				isN64handle = 1;
-			}
-			else if (strstr(bizHawkTitle, "Genesis") != NULL) {
-				strcpy(hookedEmulatorName, "BizHawk Genesis");
-				emuRegionSize = 0xE3000; 	// BizHawk 2.8 
-				isBizHawkGenesisHandle = 1;
-			}
-			else if (strstr(bizHawkTitle, "Saturn") != NULL) {
-				strcpy(hookedEmulatorName, "BizHawk Saturn");
-				emuRegionSize = 0x282000; 	// BizHawk 2.8 
-				isBizHawkSaturnHandle = 1;
-			}
-			else if (strstr(bizHawkTitle, "PlayStation") != NULL) {
-				strcpy(hookedEmulatorName, "BizHawk PlayStation");
-				emuRegionSize = 0xD902000; 	// BizHawk 2.8 
-				isBizHawkPlayStationHandle = 1;
-			}
-		}
-		else if (isRetroArchHandle == 1) {
-			char retroArchTitle[255];
-			HWND foreground = GetForegroundWindow();
-			int a = GetWindowText(foreground, retroArchTitle, 256);
-
-			// check window title for loaded core
-			if (strstr(retroArchTitle, "Mupen") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch Mupen64Plus-Next");
-				emuRegionSize = 0x20011000; // Mupen64Plus core
-				isN64handle = 1;
-				isMupenhandle = 1;
-			}
-			else if (strstr(retroArchTitle, "Kronos") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch Kronos");
-				emuRegionSize = 0x101000; // Kronos core
-				isKronosHandle = 1;
-			}
-			else if (strstr(retroArchTitle, "Beetle PSX HW") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch Beetle PSX HW");
-				emuRegionSize = 0x200000;
-			}
-			else if (strstr(retroArchTitle, "Beetle PSX") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch Beetle PSX");
-				emuRegionSize = 0x200000;
-			}
-			else if (strstr(retroArchTitle, "PCSX-ReARMed") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch PCSX-ReARMed");
-				emuRegionSize = 0x210000;
-			}
-			else if (strstr(retroArchTitle, "DuckStation") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch DuckStation");
-				emuRegionSize = 0x200000;
-			}
-			else if (strstr(retroArchTitle, "SwanStation") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch SwanStation");
-				emuRegionSize = 0x200000;
-			}
-			else if (strstr(retroArchTitle, "Flycast") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch Flycast");
-				emuRegionSize = 0x10000;
-				isFlycastHandle = 1;
-			}
-			else if (strstr(retroArchTitle, "bsnes-mercury") != NULL) {
-				strcpy(hookedEmulatorName, "RetroArch bsnes-mercury");
-				emuRegionSize = 0x39000;
-				isBSNESMercuryHandle = 1;
-			}
-		}
-		else if (isPS1handle == 1) {
-			// emuRegionSize = 0x200000; 		// DuckStation
-			emuRegionSize = 0x800000;		// DuckStation, newer version 0.1-5943 (unsure which version changed region size)
-			// TODO: check version and set region size
-			//		 maybe look for a pointer to the right region and get size from that?
-		} else if (isN64handle == 1) {
-			if (isMupenhandle)
-				emuRegionSize = 0x20011000; // RetroArch(Mupen64Plus core)/simple64/RMG
-			else
-				emuRegionSize = 0x22D0000; 	// BizHawk 2.8 (Mupen64Plus)
-		} else if (isBSNEShandle == 1) {
-			emuRegionSize = 0x34000;
-		} else if (isPcsx2handle == 1) {
-			// emuRegionSize = 0x80000;
-			emuRegionSize = 0x1000;
-		} else if (isFlycastHandle == 1) {
-			emuRegionSize = 0x10000;
-		} else if (isMesenHandle == 1) {
-			emuRegionSize = 0x1BF000;
-		} else if (isRPCS3Handle == 1) {
-			// TODO: if rpcs3 just set offset to 0x330000000 since it seems to be static?
-			emuRegionSize = 0xCC00000; // Killzone HD
-			// emuRegionSize = 0x100000; // HAZE
-		} else if (isPPSSPPHandle == 1) {
-			emuRegionSize = 0x1F00000;
-		} else if (isNOMONEYPSXHandle == 1) {
-			emuRegionSize = 0x459000;
-		} else if (isProject64Handle == 1) {
-			// emuRegionSize = 0x5BDED000;
-			emuRegionSize = 0x800000;
-		}
-
-		// PCSX2: MEM_MAPPED
-		// PPSSPP: MEM_MAPPED
-		DWORD regionType = MEM_MAPPED; // Dolphin and DuckStation regions are type MEM_MAPPED
-		if (isN64handle == 1 || isKronosHandle == 1)
-			regionType = MEM_PRIVATE;  // All N64 emulator regions are type MEM_PRIVATE
-		if (isBSNEShandle == 1 || isBSNESMercuryHandle == 1)
-			regionType = MEM_IMAGE;
-		if (isNOMONEYPSXHandle == 1)
-		{
-			// regionType = MEM_IMAGE;
-			regionType = MEM_PRIVATE;
-			// regionType = MEM_MAPPED;
-		}
-		if (isProject64Handle == 1)
-			regionType = MEM_PRIVATE;
-
-
-		// if (isBSNEShandle == 1)
-		// {
-		// 	// if BSNES, just look until you find region at 0xB140000
-		// 	PSAPI_WORKING_SET_EX_INFORMATION wsinfo;
-		// 	wsinfo.VirtualAddress = info.BaseAddress;
-
-		// 	if (info.BaseAddress == 0xB14000)
-		// 	{
-		// 		if (QueryWorkingSetEx(emuhandle, &wsinfo, sizeof(wsinfo))) { // query extended info about the memory page at the current virtual address space
-		// 			if (wsinfo.VirtualAttributes.Valid) { // check if the address space is valid
-		// 				memcpy(&emuoffset, &(info.BaseAddress), sizeof(info.BaseAddress)); // copy the base address location to our emuoffset pointer
-		// 				emuoffset += 0x2D7C; // WRAM always here? 0xB14000 + 0x2D7C, but region size is not fixed
-
-		// 				return (emuoffset != 0x0);
-		// 			}
-		// 		}
-		// 	}
-		// }
-
-		// check if region is the size of region where console memory is located
-		uint8_t regionFound = 0;
-		if (info.RegionSize == emuRegionSize && ((info.Type == regionType) || isN64handle))
-			regionFound = 1;
-		
-		// if (isBizHawkSNESHandle && !regionFound)
-		// {
-		// 	if (info.Type == regionType)
-		// 	{
-		// 		if (info.RegionSize >= (uint32_t)0x11000 && info.RegionSize <= (uint32_t)0x20000)
-		// 		{
-		// 			// handle the other possible region size
-		// 			emuRegionSize = info.RegionSize;
-		// 			regionFound = 1;
-		// 		}
-		// 	}
-		// }
-
-		if (regionFound == 1) { // why '|| isN64handle'? one N64 emulator is not MEM_PRIVATE?
-		// if (info.RegionSize == emuRegionSize) {
-			// printdebug(info.Type); // debug
-			PSAPI_WORKING_SET_EX_INFORMATION wsinfo;
-			wsinfo.VirtualAddress = info.BaseAddress;
-
-			if (QueryWorkingSetEx(emuhandle, &wsinfo, sizeof(wsinfo))) { // query extended info about the memory page at the current virtual address space
-				if (wsinfo.VirtualAttributes.Valid) { // check if the address space is valid
-					memcpy(&emuoffset, &(info.BaseAddress), sizeof(info.BaseAddress)); // copy the base address location to our emuoffset pointer
-
-					// output region start
-					// emuoffsetOut = emuoffset;
-
-					if (isBSNESMercuryHandle == 1) {
-						if (lastRegionSize != 0xB7000)
-							continue;
-						emuoffset += 0x7F1C;
-					}
-					else if (isProject64Handle == 1) {
-						if (lastRegionSize != 0xE000)
-							continue;
-					}
-					else if (isRPCS3Handle == 1) {
-						if (lastRegionSize != 0xFF70000)
-							continue;
-					}
-					else if (isNOMONEYPSXHandle == 1) {
-						emuoffset += 0x30100;
-					}
-					else if (isBizHawkPlayStationHandle == 1) {
-						emuoffset += 0x4FEAE0;
-					}
-					else if (isBizHawkSaturnHandle == 1) {
-						emuoffset += 0x81D60;
-					}
-					else if (isBizHawkSNESHandle == 1) {
-						emuoffset += 0x40;
-					}
-					else if (isKronosHandle == 1){
-						emuoffset += 0x40;
-					}
-					else if (isFlycastHandle == 1) {
-						if (lastRegionSize != 0x2000000) // region before is always size 0x2000000?
-							continue;
-					}
-					else if (isN64handle == 1)
-					{
-						if (isMupenhandle) { // RetroArch/simple64/RMG (mupen64plus GUIs)
-							// simple64/RMG/retroarch: determine buffer size before RDRAM as it changes every startup
-							emuoffset += 0x1000;
-							// while (PS1_MEM_ReadWord(0x0) == 0) // look for non-zero bytes at first address to signify the start of RDRAM
-							while (MEM_ReadUInt(0x80000000) == 0) // look for non-zero bytes at first address to signify the start of RDRAM
-								emuoffset += 0x1000; // RDRAM always begins at a multiple 0x1000 away from the initial emuhandle offset
-						}
-						else {
-							// BizHawk has small offset before N64 RDRAM
-							emuoffset += 0x8E0;
-						}
-					} else if (isBSNEShandle == 1) {
-						emuoffset += 0x2D7C; // WRAM always here? 0xB14000 + 0x2D7C, but region size is not fixed
-					} else if (isPcsx2handle == 1) {
-						// check if region before 0x80000 has a size in a range, 0x1000 <= regionsize <= 0xF000
-						// if (lastRegionSize != 0x80000 || lastlastRegionSize != 0x1000)
-						if (lastRegionSize != 0x80000 || lastlastRegionSize > 0xF000)
-							continue;
-					// } else if (isPPSSPPHandle) {
-					// 	if (lastRegionSize != 0x3800000 && lastlastRegionSize != 0x200000)
-					// 		continue;
-					}
-
-					// printdebug(lastRegionSize); // debug
-					// printdebug(info.RegionSize); // debug
-					// printdebug(&(info.BaseAddress)); // debug
-
-					return (emuoffset != 0x0);
-				}
-			}
-		}
-
-		lastlastRegionSize = lastRegionSize;
-		lastRegionSize = info.RegionSize;
-	}
-}
-//==========================================================================
-// Purpose: read int from memory
-// Parameter: address location
-//==========================================================================
-int32_t MEM_ReadInt(const uint32_t addr)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	int32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
-}
-//==========================================================================
-// Purpose: read unsigned int from memory
-// Parameter: address location
-//==========================================================================
-uint32_t MEM_ReadUInt(const uint32_t addr)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32(&output); // byteswap
-	return output;
-}
-
-// uint64_t MEM_ReadUInt64(const uint64_t addr)
-// {
-// 	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-// 		return 0;
-// 	uint64_t output; // temp var used for output of function
-// 	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-// 	MEM_ByteSwap64(&output); // byteswap
-// 	return output;
-// }
-
-uint16_t MEM_ReadUInt16(const uint32_t addr)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	uint16_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	// MEM_ByteSwap32(&output); // byteswap
-	// TODO: needs byteswap to be proper
-	return output;
-}
-
-uint8_t MEM_ReadUInt8(const uint32_t addr)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	uint8_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	return output;
-}
-//==========================================================================
-// Purpose: read float from memory
-// Parameter: address location
-//==========================================================================
-float MEM_ReadFloat(const uint32_t addr)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
-}
-//==========================================================================
-// Purpose: write int to memory
-// Parameter: address location and value
-//==========================================================================
-void MEM_WriteInt(const uint32_t addr, int32_t value)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or writing to outside of memory range
-		return;
-	MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
-}
-//==========================================================================
-// Purpose: write unsigned int to memory
-// Parameter: address location and value
-//==========================================================================
-void MEM_WriteUInt(const uint32_t addr, uint32_t value)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or writing to outside of memory range
-		return;
-	MEM_ByteSwap32(&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
-}
-//==========================================================================
-// Purpose: write float to memory
-// Parameter: address location and value
-//==========================================================================
-void MEM_WriteFloat(const uint32_t addr, float value)
-{
-	if(!emuoffset || NOTWITHINMEMRANGE(addr)) // if gamecube memory has not been init by dolphin or writing to outside of memory range
-		return;
-	MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
-}
-//==========================================================================
-// Purpose: byteswap input value
-// Parameter: pointer of value (must be 4 byte long)
-//==========================================================================
+/* -----------------------------------------------------------------------
+ * Low-level helpers
+ * -------------------------------------------------------------------- */
 static void MEM_ByteSwap32(uint32_t *input)
 {
-	const uint8_t *inputarray = ((uint8_t *)input); // set byte array to input
-	*input = (uint32_t)((inputarray[0] << 24) | (inputarray[1] << 16) | (inputarray[2] << 8) | (inputarray[3])); // reassign input to swapped value
+    const uint8_t *a = (const uint8_t *)input;
+    *input = (uint32_t)((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]);
 }
 
-static void MEM_ByteSwap64(uint64_t *input)
+/* Generic process memory read via process_vm_readv */
+static ssize_t mem_read(uintptr_t remote_addr, void *buf, size_t len)
 {
-	const uint8_t *inputarray = ((uint8_t *)input); // set byte array to input
-	// *input = (uint64_t)((inputarray[0] << 24) | (inputarray[1] << 16) | (inputarray[2] << 8) | (inputarray[3])); // reassign input to swapped value
-	*input = (uint64_t)((inputarray[0] << 56) | (inputarray[1] << 48) | (inputarray[2] << 40) | (inputarray[3] << 32) | (inputarray[4] << 24) | (inputarray[5] << 16) | (inputarray[6] << 8) | (inputarray[7])); // reassign input to swapped value
+    struct iovec local_iov  = { buf,               len };
+    struct iovec remote_iov = { (void *)remote_addr, len };
+    return process_vm_readv(emupid, &local_iov, 1, &remote_iov, 1, 0);
 }
 
-//==========================================================================
-// Purpose: read int from ARAM ***REQUIRES MMU TO BE DISABLED IN DOLPHIN***
-// Parameter: address location
-//==========================================================================
+/* Generic process memory write via process_vm_writev */
+static ssize_t mem_write(uintptr_t remote_addr, const void *buf, size_t len)
+{
+    struct iovec local_iov  = { (void *)buf,        len };
+    struct iovec remote_iov = { (void *)remote_addr, len };
+    return process_vm_writev(emupid, &local_iov, 1, &remote_iov, 1, 0);
+}
+
+/* -----------------------------------------------------------------------
+ * Process discovery – scan /proc for known emulator names
+ * Returns the pid, or -1 if not found.
+ * -------------------------------------------------------------------- */
+
+/* Read the short command name from /proc/<pid>/comm (max 15 chars + \n) */
+static int proc_comm(pid_t pid, char *out, size_t outlen)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/comm", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    if (!fgets(out, (int)outlen, f)) { fclose(f); return 0; }
+    fclose(f);
+    out[strcspn(out, "\n")] = '\0';
+    return 1;
+}
+
+/* Read the full executable path symlink /proc/<pid>/exe -> basename */
+static int proc_exe_basename(pid_t pid, char *out, size_t outlen)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/exe", (int)pid);
+    char buf[256];
+    ssize_t n = readlink(path, buf, sizeof(buf) - 1);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    /* basename */
+    const char *b = strrchr(buf, '/');
+    snprintf(out, outlen, "%s", b ? b + 1 : buf);
+    out[outlen - 1] = '\0';
+    return 1;
+}
+
+/* Check if the process's maps contain a specific substring (for RetroArch
+ * core detection from loaded .so names). */
+static int proc_maps_contains(pid_t pid, const char *needle)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char line[512];
+    int found = 0;
+    while (fgets(line, sizeof(line), f))
+    {
+        if (strstr(line, needle)) { found = 1; break; }
+    }
+    fclose(f);
+    return found;
+}
+
+/* -----------------------------------------------------------------------
+ * MEM_Init  – find a supported emulator process and open it
+ * -------------------------------------------------------------------- */
+uint8_t MEM_Init(void)
+{
+    emupid = -1;
+    memset(hookedEmulatorName, 0, sizeof(hookedEmulatorName));
+
+    /* Reset all handle flags */
+    isPS1handle = isN64handle = isMupenhandle = isBSNEShandle = 0;
+    isDolphinHandle = 0;
+    isPcsx2handle = isRetroArchHandle = isKronosHandle = 0;
+    isFlycastHandle = isBSNESMercuryHandle = isRPCS3Handle = 0;
+    isPPSSPPHandle = isProject64Handle = 0;
+
+    DIR *proc = opendir("/proc");
+    if (!proc) return 0;
+
+    struct dirent *ent;
+    while ((ent = readdir(proc)) != NULL)
+    {
+        if (!isdigit((unsigned char)ent->d_name[0])) continue;
+        pid_t pid = (pid_t)atoi(ent->d_name);
+
+        char comm[64] = {0};
+        char exe[256] = {0};
+        proc_comm(pid, comm, sizeof(comm));
+        proc_exe_basename(pid, exe, sizeof(exe));
+
+        /* Helper: match either comm or exe basename */
+#define MATCH(s) (strcmp(comm,(s))==0 || strcmp(exe,(s))==0)
+
+        /* "dolphin" alone intentionally excluded — that is the KDE file manager */
+        if (MATCH("dolphin-emu") || MATCH("dolphin-emu-qt") ||
+            strstr(exe, "dolphin-emu") != NULL)
+        {
+            strcpy(hookedEmulatorName, "Dolphin");
+            isDolphinHandle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("duckstation-qt") || MATCH("duckstation-nogui") ||
+            /* Wine */ MATCH("duckstation-qt-"))
+        {
+            strcpy(hookedEmulatorName, "DuckStation");
+            isPS1handle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("pcsx2") || MATCH("PCSX2") ||
+            MATCH("pcsx2-qt") || MATCH("pcsx2-qtx64") || MATCH("pcsx2-avx2"))
+        {
+            strcpy(hookedEmulatorName, "PCSX2");
+            isPcsx2handle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("retroarch"))
+        {
+            strcpy(hookedEmulatorName, "RetroArch - No core loaded");
+            isRetroArchHandle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("PPSSPP") || MATCH("PPSSPPQt"))
+        {
+            strcpy(hookedEmulatorName, "PPSSPP");
+            isPPSSPPHandle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("simple64-gui") || MATCH("simple64"))
+        {
+            strcpy(hookedEmulatorName, "simple64");
+            isN64handle = 1;
+            isMupenhandle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("RMG"))
+        {
+            strcpy(hookedEmulatorName, "Rosalie's Mupen GUI");
+            isN64handle = 1;
+            isMupenhandle = 1;
+            emupid = pid;
+            break;
+        }
+        if (MATCH("rpcs3"))
+        {
+            strcpy(hookedEmulatorName, "RPCS3");
+            isRPCS3Handle = 1;
+            emupid = pid;
+            break;
+        }
+        /* flycast standalone */
+        if (MATCH("flycast"))
+        {
+            strcpy(hookedEmulatorName, "Flycast");
+            isFlycastHandle = 1;
+            emupid = pid;
+            break;
+        }
+#undef MATCH
+    }
+    closedir(proc);
+    return (emupid != -1) ? 1 : 0;
+}
+
+void MEM_Quit(void)
+{
+    /* Nothing to close on Linux – no HANDLE to release */
+    emupid = -1;
+}
+
+/* -----------------------------------------------------------------------
+ * MEM_FindRamOffset
+ * Parse /proc/<pid>/maps to find the emulator's console RAM region.
+ * Equivalent to the Windows VirtualQueryEx + QueryWorkingSetEx loop.
+ * -------------------------------------------------------------------- */
+
+/* A parsed line from /proc/<pid>/maps */
+typedef struct {
+    uintptr_t   start;
+    uintptr_t   end;
+    char        perms[8];   /* "rwxp" style */
+    int         is_private; /* perms[3]=='p' */
+    int         is_anon;    /* no device/inode (00:00 0) */
+    char        name[256];  /* pathname or empty */
+} MapsRegion;
+
+static int parse_maps_line(const char *line, MapsRegion *r)
+{
+    unsigned long long start, end;
+    unsigned int dev_maj, dev_min;
+    unsigned long inode;
+    char perms[8] = {0}, name[256] = {0};
+    int n = sscanf(line, "%llx-%llx %7s %*x %x:%x %lu %255[^\n]",
+                   &start, &end, perms, &dev_maj, &dev_min, &inode, name);
+    if (n < 6) return 0;
+    r->start      = (uintptr_t)start;
+    r->end        = (uintptr_t)end;
+    snprintf(r->perms, sizeof(r->perms), "%s", perms);
+    r->is_private = (perms[3] == 'p');
+    r->is_anon    = (dev_maj == 0 && dev_min == 0 && inode == 0);
+    if (n >= 7)
+        snprintf(r->name, sizeof(r->name), "%s", name);
+    else
+        r->name[0] = '\0';
+    return 1;
+}
+
+/* Verify a candidate region is readable */
+static int region_is_valid(uintptr_t addr)
+{
+    uint32_t test = 0;
+    return (mem_read(addr, &test, sizeof(test)) == (ssize_t)sizeof(test));
+}
+
+/* -----------------------------------------------------------------------
+ * Dolphin (GC/Wii) disc-header verification.
+ *
+ * On Linux, Dolphin's MemArena maps the 24 MB MEM1 region into a
+ * 32 MB (0x2000000) virtual view — the same size used by the "FakeVMem"
+ * placeholder region.  Both can appear as readable rw-shared mappings of
+ * identical size, so a size-only match can land on the wrong one (which
+ * just contains zeros/garbage), causing every game driver's Status()
+ * check to read nonsense and never match.
+ *
+ * Every booted GC or Wii disc has a fixed 4-byte magic word at offset
+ * 0x1C in its disc header (mapped at GC address 0x8000001C) – this is
+ * the same value Dolphin itself checks when verifying a valid boot
+ * image. We use it to confirm a size-matched candidate is *actually*
+ * backing the console's RAM before accepting it.
+ * -------------------------------------------------------------------- */
+#define GC_DISC_MAGIC  0xC2339F3DU
+#define WII_DISC_MAGIC 0x5D1C9EA3U
+
+static int dolphin_region_looks_valid(uintptr_t candidate)
+{
+    uint32_t magic = 0;
+    /* offset 0x1C from the start of MEM1 == GC address 0x8000001C */
+    if (mem_read(candidate + 0x1C, &magic, sizeof(magic)) != (ssize_t)sizeof(magic))
+        return 0;
+    MEM_ByteSwap32(&magic); /* GC/Wii memory is big-endian */
+    return (magic == GC_DISC_MAGIC || magic == WII_DISC_MAGIC);
+}
+
+/* -----------------------------------------------------------------------
+ * Detect RetroArch loaded core from maps (replaces window title check)
+ * -------------------------------------------------------------------- */
+static void retroarch_detect_core(void)
+{
+    /* Ordered by priority – first match wins */
+    if (proc_maps_contains(emupid, "mupen64plus") ||
+        proc_maps_contains(emupid, "mupen64plus_next"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch Mupen64Plus-Next");
+        isN64handle   = 1;
+        isMupenhandle = 1;
+        return;
+    }
+    if (proc_maps_contains(emupid, "kronos_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch Kronos");
+        isKronosHandle = 1;
+        return;
+    }
+    if (proc_maps_contains(emupid, "mednafen_psx_hw_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch Beetle PSX HW");
+        return;
+    }
+    if (proc_maps_contains(emupid, "mednafen_psx_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch Beetle PSX");
+        return;
+    }
+    if (proc_maps_contains(emupid, "pcsx_rearmed_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch PCSX-ReARMed");
+        return;
+    }
+    if (proc_maps_contains(emupid, "duckstation_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch DuckStation");
+        return;
+    }
+    if (proc_maps_contains(emupid, "swanstation_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch SwanStation");
+        return;
+    }
+    if (proc_maps_contains(emupid, "bsnes_mercury"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch bsnes-mercury");
+        isBSNESMercuryHandle = 1;
+        return;
+    }
+    if (proc_maps_contains(emupid, "flycast_libretro"))
+    {
+        strcpy(hookedEmulatorName, "RetroArch Flycast");
+        isFlycastHandle = 1;
+        return;
+    }
+}
+
+uint8_t MEM_FindRamOffset(void)
+{
+    emuoffset = 0;
+
+    if (emupid == -1) return 0;
+
+    /* For RetroArch, detect which core is loaded */
+    if (isRetroArchHandle)
+        retroarch_detect_core();
+
+    /* ------------------------------------------------------------
+     * Target region sizes per emulator.
+     *
+     * Dolphin on Linux uses memfd_create("dolphin-emu",0)+MAP_SHARED,
+     * so the region appears as "rw-s" with a real inode, NOT anonymous.
+     * We therefore do NOT filter on is_anon; size + rw + a test-read
+     * is the reliable discriminator on Linux.
+     *
+     * PCSX2: Windows looked for a 0x1000 region using surrounding-region
+     * ordering that doesn't translate to Linux.  On Linux the EE RAM is a
+     * straightforward 0x2000000 anonymous mapping – use that instead.
+     * ------------------------------------------------------------ */
+    uint64_t emuRegionSize = 0x2000000; /* Dolphin GC/Wii MEM1+MEM2 */
+
+    if (isPS1handle)
+        emuRegionSize = 0x800000;
+    else if (isN64handle)
+        emuRegionSize = isMupenhandle ? 0x20011000 : 0x22D0000;
+    else if (isBSNEShandle)
+        emuRegionSize = 0x34000;
+    else if (isPcsx2handle)
+        emuRegionSize = 0x2000000;   /* Linux: 32 MB EE RAM (not 0x1000) */
+    else if (isFlycastHandle)
+        emuRegionSize = 0x10000;
+    else if (isRPCS3Handle)
+        emuRegionSize = 0xCC00000;
+    else if (isPPSSPPHandle)
+        emuRegionSize = 0x1F00000;
+    else if (isProject64Handle)
+        emuRegionSize = 0x800000;
+
+    /* Open /proc/<pid>/maps */
+    char maps_path[64];
+    snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", (int)emupid);
+    FILE *fp = fopen(maps_path, "r");
+    if (!fp) {
+        fprintf(stderr, "[mi] cannot open %s: check permissions\n", maps_path);
+        return 0;
+    }
+
+    char line[512];
+    MapsRegion r;
+    uint64_t lastRegionSize = 0;
+    static int debug_call_counter = 0;
+    const int debug = (getenv("MOUSEINJECTOR_DEBUG") != NULL) &&
+                       (debug_call_counter++ % 10 == 0); /* ~once/sec at 100ms poll */
+
+    if (debug)
+        fprintf(stderr, "[mi-debug] scanning for %s region size 0x%lX\n",
+                hookedEmulatorName, (unsigned long)emuRegionSize);
+
+    while (fgets(line, sizeof(line), fp))
+    {
+        if (!parse_maps_line(line, &r)) continue;
+
+        uint64_t regionSize = r.end - r.start;
+
+        /* Must have read+write permission.
+         * 's' (shared) is allowed – that is how Dolphin maps its RAM. */
+        if (r.perms[0] != 'r' || r.perms[1] != 'w') {
+            lastRegionSize = regionSize;
+            continue;
+        }
+
+        if (regionSize != emuRegionSize) {
+            lastRegionSize = regionSize;
+            continue;
+        }
+
+        if (debug)
+            fprintf(stderr, "[mi-debug] size match at 0x%lx perms=%s name=%s\n",
+                    (unsigned long)r.start, r.perms, r.name);
+
+        /* ---- size matches: apply emulator-specific rules ---- */
+        uintptr_t candidate = r.start;
+
+        if (isBSNESMercuryHandle) {
+            /* BSNES-mercury: specific preceding-region size (same on Linux) */
+            if (lastRegionSize != 0xB7000) goto next;
+            candidate += 0x7F1C;
+
+        } else if (isBSNEShandle) {
+            candidate += 0x2D7C;
+
+        } else if (isN64handle && isMupenhandle) {
+            /* simple64 / RMG: first 0x1000 is metadata; scan for RDRAM */
+            candidate += 0x1000;
+            emuoffset   = candidate;
+            int steps   = 256;
+            while (steps-- > 0) {
+                uint32_t probe = 0;
+                if (mem_read(emuoffset, &probe, 4) == 4 && probe != 0) break;
+                emuoffset += 0x1000;
+            }
+            if (region_is_valid(emuoffset)) { fclose(fp); return 1; }
+            emuoffset = 0;
+            goto next;
+
+        } else if (isFlycastHandle) {
+            /* Flycast: region must be preceded by another 0x2000000 block */
+            if (lastRegionSize != 0x2000000) goto next;
+
+        } else if (isRPCS3Handle) {
+            if (lastRegionSize != 0xFF70000) goto next;
+
+        } else if (isPcsx2handle) {
+            /* On Linux we just take the first 32 MB rw region; the
+             * Windows ordering heuristic (lastRegionSize == 0x80000) does
+             * not apply here. */
+            (void)lastRegionSize;
+        }
+        /* DuckStation, PPSSPP, RetroArch cores, etc.:
+         * no extra ordering constraint – validate with a test read. */
+
+        if (!region_is_valid(candidate)) {
+            if (debug) fprintf(stderr, "[mi-debug]   -> not readable, skip\n");
+            goto next;
+        }
+
+        if (isDolphinHandle) {
+            /* Multiple 0x2000000 regions exist in Dolphin's Linux address
+             * space (the real MEM1 view AND the same-sized FakeVMem
+             * placeholder). Confirm this candidate is actually backing
+             * RAM before accepting it — otherwise keep scanning, since
+             * the real MEM1 view may appear later in the maps file. */
+            if (!dolphin_region_looks_valid(candidate)) {
+                if (debug) fprintf(stderr, "[mi-debug]   -> magic check failed, skip\n");
+                goto next;
+            }
+        }
+
+        if (debug) fprintf(stderr, "[mi-debug]   -> ACCEPTED as emuoffset\n");
+        emuoffset = candidate;
+        fclose(fp);
+        return 1;
+
+    next:
+        lastRegionSize = regionSize;
+    }
+
+    fclose(fp);
+    if (debug)
+        fprintf(stderr, "[mi-debug] no matching region found this pass\n");
+    return 0;
+}
+
+/* -----------------------------------------------------------------------
+ * Main GC / Wii RAM  (MEM1, with byte-swap)
+ * -------------------------------------------------------------------- */
+int32_t MEM_ReadInt(const uint32_t addr)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return 0;
+    int32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    MEM_ByteSwap32((uint32_t *)&output);
+    return output;
+}
+uint32_t MEM_ReadUInt(const uint32_t addr)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    MEM_ByteSwap32(&output);
+    return output;
+}
+uint16_t MEM_ReadUInt16(const uint32_t addr)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return 0;
+    uint16_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    return output;
+}
+uint8_t MEM_ReadUInt8(const uint32_t addr)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return 0;
+    uint8_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    return output;
+}
+float MEM_ReadFloat(const uint32_t addr)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    MEM_ByteSwap32((uint32_t *)&output);
+    return output;
+}
+void MEM_WriteInt(const uint32_t addr, int32_t value)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return;
+    MEM_ByteSwap32((uint32_t *)&value);
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
+}
+void MEM_WriteUInt(const uint32_t addr, uint32_t value)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return;
+    MEM_ByteSwap32(&value);
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
+}
+void MEM_WriteFloat(const uint32_t addr, float value)
+{
+    if (!emuoffset || NOTWITHINMEMRANGE(addr)) return;
+    MEM_ByteSwap32((uint32_t *)&value);
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
+}
+
+/* -----------------------------------------------------------------------
+ * ARAM (GameCube Audio RAM)
+ * -------------------------------------------------------------------- */
 int32_t ARAM_ReadInt(const uint32_t addr)
 {
-	if(!emuoffset || NOTWITHINARAMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	int32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + aramoffset + (addr - 0x7E000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || NOTWITHINARAMRANGE(addr)) return 0;
+    int32_t output = 0;
+    mem_read(emuoffset + aramoffset + (addr - 0x7E000000), &output, sizeof(output));
+    MEM_ByteSwap32((uint32_t *)&output);
+    return output;
 }
-//==========================================================================
-// Purpose: read unsigned int from ARAM ***REQUIRES MMU TO BE DISABLED IN DOLPHIN***
-// Parameter: address location
-//==========================================================================
 uint32_t ARAM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || NOTWITHINARAMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + aramoffset + (addr - 0x7E000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32(&output); // byteswap
-	return output;
+    if (!emuoffset || NOTWITHINARAMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + aramoffset + (addr - 0x7E000000), &output, sizeof(output));
+    MEM_ByteSwap32(&output);
+    return output;
 }
-//==========================================================================
-// Purpose: read float from ARAM ***REQUIRES MMU TO BE DISABLED IN DOLPHIN***
-// Parameter: address location
-//==========================================================================
 float ARAM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || NOTWITHINARAMRANGE(addr)) // if gamecube memory has not been init by dolphin or reading from outside of memory range
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + aramoffset + (addr - 0x7E000000)), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || NOTWITHINARAMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + aramoffset + (addr - 0x7E000000), &output, sizeof(output));
+    MEM_ByteSwap32((uint32_t *)&output);
+    return output;
 }
-//==========================================================================
-// Purpose: write unsigned int to ARAM ***REQUIRES MMU TO BE DISABLED IN DOLPHIN***
-// Parameter: address location and value
-//==========================================================================
 void ARAM_WriteUInt(const uint32_t addr, uint32_t value)
 {
-	if(!emuoffset || NOTWITHINARAMRANGE(addr)) // if gamecube memory has not been init by dolphin or writing to outside of memory range
-		return;
-	MEM_ByteSwap32(&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + aramoffset + (addr - 0x7E000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || NOTWITHINARAMRANGE(addr)) return;
+    MEM_ByteSwap32(&value);
+    mem_write(emuoffset + aramoffset + (addr - 0x7E000000), &value, sizeof(value));
 }
-//==========================================================================
-// Purpose: write float to ARAM ***REQUIRES MMU TO BE DISABLED IN DOLPHIN***
-// Parameter: address location and value
-//==========================================================================
 void ARAM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || NOTWITHINARAMRANGE(addr)) // if gamecube memory has not been init by dolphin or writing to outside of memory range
-		return;
-	MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	// ARAM offset = 0x02000000
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + aramoffset + (addr - 0x7E000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || NOTWITHINARAMRANGE(addr)) return;
+    MEM_ByteSwap32((uint32_t *)&value);
+    mem_write(emuoffset + aramoffset + (addr - 0x7E000000), &value, sizeof(value));
 }
 
+/* -----------------------------------------------------------------------
+ * PS1 memory (little-endian, no byte-swap)
+ * -------------------------------------------------------------------- */
 uint32_t PS1_MEM_ReadPointer(const uint32_t addr)
 {
-	// assumes the address of a ps1 pointer in the form 0x80BbA1A2 - Bb = Bank, A1A2 = Address in bank
-	// PS1 pointer stored in little endian (A2A1Bb80), ReadProcessMemory reads it in reverse resulting in 80BbA1A2
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return (output - 0x80000000); // return address minus the 0x8 on the front
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return (output - 0x80000000);
 }
-
 uint32_t PS1_MEM_ReadWord(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	MEM_ByteSwap32(&output); // byteswap
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    MEM_ByteSwap32(&output);
+    return output;
 }
-
 uint32_t PS1_MEM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 int32_t PS1_MEM_ReadInt(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	int32_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    int32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 int16_t PS1_MEM_ReadInt16(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	int16_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    int16_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 uint16_t PS1_MEM_ReadHalfword(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	// read only 2 bytes
-	uint16_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    uint16_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 uint8_t PS1_MEM_ReadByte(const uint32_t addr)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint8_t output;
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return 0;
+    uint8_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 void PS1_MEM_WriteInt(const uint32_t addr, int32_t value)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
 void PS1_MEM_WriteInt16(const uint32_t addr, int16_t value)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
 void PS1_MEM_WriteWord(const uint32_t addr, uint32_t value)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
 void PS1_MEM_WriteHalfword(const uint32_t addr, uint16_t value)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
 void PS1_MEM_WriteByte(const uint32_t addr, uint8_t value)
 {
-	if(!emuoffset || PS1NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS1NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
 
-//==========================================================================
-// N64 addresses should not be byteswapped since they are stored little endian in emulator memory
-//==========================================================================
+/* -----------------------------------------------------------------------
+ * N64 memory (little-endian in mupen64plus, no byte-swap)
+ * -------------------------------------------------------------------- */
 uint32_t N64_MEM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    return output;
 }
-
 int16_t N64_MEM_ReadInt16(const uint32_t addr)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	int16_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return 0;
+    int16_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    return output;
 }
-
 float N64_MEM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + (addr - 0x80000000), &output, sizeof(output));
+    return output;
 }
-
 void N64_MEM_WriteUInt(const uint32_t addr, uint32_t value)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
 }
-
 void N64_MEM_WriteInt16(const uint32_t addr, int16_t value)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
 }
-
 void N64_MEM_WriteByte(const uint32_t addr, uint8_t value)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
 }
-
 void N64_MEM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || N64NOTWITHINMEMRANGE(addr)) // if n64 memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000000)), &value, sizeof(value), NULL);
+    if (!emuoffset || N64NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000000), &value, sizeof(value));
 }
 
+/* -----------------------------------------------------------------------
+ * SNES memory
+ * -------------------------------------------------------------------- */
 uint8_t SNES_MEM_ReadByte(const uint32_t addr)
 {
-	if(!emuoffset || SNESNOTWITHINMEMRANGE(addr)) // if snes memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint8_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || SNESNOTWITHINMEMRANGE(addr)) return 0;
+    uint8_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
-uint16_t SNES_MEM_ReadWord(const uint32_t addr) // 16bit word
+uint16_t SNES_MEM_ReadWord(const uint32_t addr)
 {
-	if(!emuoffset || SNESNOTWITHINMEMRANGE(addr)) // if snes memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint16_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || SNESNOTWITHINMEMRANGE(addr)) return 0;
+    uint16_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 void SNES_MEM_WriteByte(const uint32_t addr, uint8_t value)
 {
-	if(!emuoffset || SNESNOTWITHINMEMRANGE(addr)) // if snes memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || SNESNOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
-void SNES_MEM_WriteWord(const uint32_t addr, uint16_t value) // 16bit word
+void SNES_MEM_WriteWord(const uint32_t addr, uint16_t value)
 {
-	if(!emuoffset || SNESNOTWITHINMEMRANGE(addr)) // if snes memory has not been init by emulator or writing to outside of memory range
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || SNESNOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
 
+/* -----------------------------------------------------------------------
+ * PS2 memory
+ * -------------------------------------------------------------------- */
 uint32_t PS2_MEM_ReadPointer(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	// MEM_ByteSwap32(&output); // byteswap
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 uint32_t PS2_MEM_ReadWord(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	MEM_ByteSwap32(&output); // byteswap
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 uint32_t PS2_MEM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 uint32_t PS2_MEM_ReadUInt16(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint16_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    uint16_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return (uint32_t)output;
 }
-
 int16_t PS2_MEM_ReadInt16(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	int16_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    int16_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 uint8_t PS2_MEM_ReadUInt8(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) // if ps2 memory has not been init by emulator or reading from outside of memory range
-		return 0;
-	uint8_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    uint8_t output = 0;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 float PS2_MEM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) 
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &output, sizeof(output), NULL);
-	// MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + (addr - 0x80000), &output, sizeof(output));
+    return output;
 }
-
 void PS2_MEM_WriteWord(const uint32_t addr, uint32_t value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr))
-		return;
-	MEM_ByteSwap32(&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &value, sizeof(value), NULL);
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000), &value, sizeof(value));
 }
-
 void PS2_MEM_WriteUInt(const uint32_t addr, uint32_t value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &value, sizeof(value), NULL);
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000), &value, sizeof(value));
 }
-
 void PS2_MEM_WriteUInt16(const uint32_t addr, uint16_t value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &value, sizeof(value), NULL);
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000), &value, sizeof(value));
 }
-
 void PS2_MEM_WriteInt16(const uint32_t addr, int16_t value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &value, sizeof(value), NULL);
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000), &value, sizeof(value));
 }
-
-
 void PS2_MEM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) 
-		return;
-	// MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + (addr - 0x80000)), &value, sizeof(value), NULL);
+    if (!emuoffset || PS2NOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + (addr - 0x80000), &value, sizeof(value));
 }
 
-// TODO: give Dreamcast it's own within mem range
-// =================================================
-//		Sega Dreamcast
-// =================================================
+/* -----------------------------------------------------------------------
+ * Sega Dreamcast (SD) memory
+ * -------------------------------------------------------------------- */
 uint32_t SD_MEM_ReadWord(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) 
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	// printdebug(1); // debug
-	MEM_ByteSwap32(&output); // byteswap
-	return output;
+    if (!emuoffset) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 float SD_MEM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr)) 
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	// MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 void SD_MEM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || PS2NOTWITHINMEMRANGE(addr))
-		return;
-	// MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-// uint16_t SS_MEM_ReadHalfword(const uint32_t addr)
-// {
-// 	if(!emuoffset || SSNOTWITHINMEMRANGE(addr))
-// 		return 0;
-// 	// read only 2 bytes
-// 	uint16_t output;
-// 	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-// 	return output;
-// }
 
+/* -----------------------------------------------------------------------
+ * PS3 memory (via RPCS3)
+ * -------------------------------------------------------------------- */
 uint32_t PS3_MEM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || PS3NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || PS3NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    MEM_ByteSwap32(&output);
+    return output;
 }
-
-uint32_t PS3_MEM_ReadPointer(const uint32_t addr)
-{
-	if(!emuoffset || PS3NOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	if (output < 0x30000000)
-		return 0; // not a pointer
-	return output - 0x30000000;
-}
-
 float PS3_MEM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || PS3NOTWITHINMEMRANGE(addr))
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || PS3NOTWITHINMEMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    MEM_ByteSwap32((uint32_t *)&output);
+    return output;
 }
-
+uint32_t PS3_MEM_ReadPointer(const uint32_t addr)
+{
+    if (!emuoffset || PS3NOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    MEM_ByteSwap32(&output);
+    return output;
+}
 void PS3_MEM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || PS3NOTWITHINMEMRANGE(addr)) 
-		return;
-	MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PS3NOTWITHINMEMRANGE(addr)) return;
+    MEM_ByteSwap32((uint32_t *)&value);
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
 
+/* -----------------------------------------------------------------------
+ * PSP memory (via PPSSPP)
+ * -------------------------------------------------------------------- */
 uint32_t PSP_MEM_ReadWord(const uint32_t addr)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 uint32_t PSP_MEM_ReadPointer(const uint32_t addr)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output - 0x8000000;
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 uint32_t PSP_MEM_ReadUInt(const uint32_t addr)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return 0;
+    uint32_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 uint16_t PSP_MEM_ReadUInt16(const uint32_t addr)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return 0;
-	uint32_t output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	return output;
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return 0;
+    uint16_t output = 0;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 float PSP_MEM_ReadFloat(const uint32_t addr)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr)) 
-		return 0;
-	float output; // temp var used for output of function
-	ReadProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &output, sizeof(output), NULL);
-	// MEM_ByteSwap32((uint32_t *)&output); // byteswap
-	return output;
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return 0;
+    float output = 0.0f;
+    mem_read(emuoffset + addr, &output, sizeof(output));
+    return output;
 }
-
 void PSP_MEM_WriteUInt16(const uint32_t addr, uint16_t value)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return;
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
-
 void PSP_MEM_WriteFloat(const uint32_t addr, float value)
 {
-	if(!emuoffset || PSPNOTWITHINMEMRANGE(addr))
-		return;
-	// MEM_ByteSwap32((uint32_t *)&value); // byteswap
-	WriteProcessMemory(emuhandle, (LPVOID)(emuoffset + addr), &value, sizeof(value), NULL);
+    if (!emuoffset || PSPNOTWITHINMEMRANGE(addr)) return;
+    mem_write(emuoffset + addr, &value, sizeof(value));
 }
 
-void printdebug(uint32_t val)
-{
-	FILE *fp;
-
-	fp = fopen("test.txt", "w");
-	char output[255];
-	sprintf(output, "%u", val);
-	fprintf(fp, output);
-	
-	fclose(fp);
-}
+/* printdebug stub (used in commented-out debug lines in original) */
+void printdebug(uint32_t val) { (void)val; }

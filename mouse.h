@@ -22,4 +22,4 @@ extern int32_t xmouse, ymouse;
 extern uint8_t MOUSE_Init(void);
 extern void MOUSE_Quit(void);
 extern void MOUSE_Lock(void);
-extern void MOUSE_Update(const uint16_t tickrate);
+extern void MOUSE_Update(const uint16_t tickrate);extern void MOUSE_ReleaseGrab(void);

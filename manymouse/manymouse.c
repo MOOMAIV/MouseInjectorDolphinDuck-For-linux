@@ -1,92 +1,74 @@
 /*
- * ManyMouse foundation code; apps talks to this and it talks to the lowlevel
- *  code for various platforms.
+ * ManyMouse foundation code – Linux port version.
+ * Only evdev (and optionally XInput2) drivers are compiled in.
  *
- * Please see the file LICENSE.txt in the source's root directory.
- *
- *  This file written by Ryan C. Gordon.
+ * Original code Copyright (c) 2005-2012 Ryan C. Gordon.
  */
-
 #include <stdlib.h>
 #include "manymouse.h"
 
 static const char *manymouse_copyright =
     "ManyMouse " MANYMOUSE_VERSION " copyright (c) 2005-2012 Ryan C. Gordon.";
 
-extern const ManyMouseDriver *ManyMouseDriver_windows;
+/* Drivers available on Linux */
+extern const ManyMouseDriver *ManyMouseDriver_evdev;   /* linux_evdev.c   */
+
+#ifdef HAVE_X11
+extern const ManyMouseDriver *ManyMouseDriver_xinput2; /* x11_xinput2.c   */
+#endif
 
 /*
- * These have to be in the favored order...obviously it doesn't matter if the
- *  Linux driver comes before or after the Windows one, since one won't
- *  exist on a given platform, but things like Mac OS X's hidmanager (which
- *  only works on OS X 10.5 and later) should come before Mac OS X's
- *  hidutilities (which works on older systems, but may stop working in 10.6
- *  and later). In the Mac OS X case, you want to try the newer tech, and if
- *  it's not available (on 10.4 or earlier), fall back to trying the legacy
- *  code.
+ * Favoured order: XInput2 (if available) → evdev
+ * XInput2 gives per-device motion on X11; evdev works everywhere.
  */
 static const ManyMouseDriver **mice_drivers[] =
 {
-    &ManyMouseDriver_windows,
+#ifdef HAVE_X11
+    &ManyMouseDriver_xinput2,
+#endif
+    &ManyMouseDriver_evdev,
 };
-
 
 static const ManyMouseDriver *driver = NULL;
 
 int ManyMouse_Init(void)
 {
-    const int upper = (sizeof (mice_drivers) / sizeof (mice_drivers[0]));
+    const int upper = (int)(sizeof(mice_drivers) / sizeof(mice_drivers[0]));
     int i;
     int retval = -1;
 
-    /* impossible test to keep manymouse_copyright linked into the binary. */
-    if (manymouse_copyright == NULL)
-        return -1;
-
-    if (driver != NULL)
-        return -1;
+    if (manymouse_copyright == NULL) return -1;  /* keep symbol linked */
+    if (driver != NULL) return -1;
 
     for (i = 0; (i < upper) && (driver == NULL); i++)
     {
-        const ManyMouseDriver *this_driver = *(mice_drivers[i]);
-        if (this_driver != NULL) /* if not built for this platform, skip it. */
+        const ManyMouseDriver *d = *(mice_drivers[i]);
+        if (d != NULL)
         {
-            const int mice = this_driver->init();
-            if (mice > retval)
-                retval = mice; /* may move from "error" to "no mice found". */
-
-            if (mice >= 0)
-                driver = this_driver;
-        } /* if */
-    } /* for */
-
+            const int mice = d->init();
+            if (mice > retval) retval = mice;
+            if (mice >= 0)     driver = d;
+        }
+    }
     return retval;
-} /* ManyMouse_Init */
-
+}
 
 void ManyMouse_Quit(void)
 {
-    if (driver != NULL)
-    {
-        driver->quit();
-        driver = NULL;
-    } /* if */
-} /* ManyMouse_Quit */
+    if (driver) { driver->quit(); driver = NULL; }
+}
 
 const char *ManyMouse_DriverName(void)
 {
-    return (driver) ? driver->driver_name : NULL;
-} /* ManyMouse_DriverName */
+    return driver ? driver->driver_name : NULL;
+}
 
 const char *ManyMouse_DeviceName(unsigned int index)
 {
-    return (driver) ? driver->name(index) : NULL;
-} /* ManyMouse_DeviceName */
+    return driver ? driver->name(index) : NULL;
+}
 
 int ManyMouse_PollEvent(ManyMouseEvent *event)
 {
-    return (driver) ? driver->poll(event) : 0;
-} /* ManyMouse_PollEvent */
-
-/* end of manymouse.c ... */
-
+    return driver ? driver->poll(event) : 0;
+}

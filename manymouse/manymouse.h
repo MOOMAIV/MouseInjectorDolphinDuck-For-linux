@@ -53,6 +53,17 @@ void ManyMouse_Quit(void);
 const char *ManyMouse_DeviceName(unsigned int index);
 int ManyMouse_PollEvent(ManyMouseEvent *event);
 
+/*
+ * Linux-only: exclusively grab (grab=1) or release (grab=0) every mouse
+ * fd that ManyMouse's own evdev backend is reading from. This must be
+ * used instead of opening separate fds to the same devices — EVIOCGRAB
+ * is per file descriptor, and grabbing via a different fd silences
+ * ManyMouse's own reads. Returns the number of devices successfully
+ * grabbed/released. Always returns 0 if the evdev driver isn't active
+ * or on non-Linux platforms.
+ */
+int ManyMouse_LinuxEvdevGrab(int grab);
+
 #ifdef __cplusplus
 }
 #endif

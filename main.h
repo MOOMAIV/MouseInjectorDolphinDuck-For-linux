@@ -1,67 +1,75 @@
 //==========================================================================
-// Mouse Injector for Dolphin
+// Mouse Injector for Dolphin - Linux Port
 //==========================================================================
 // Copyright (C) 2019-2020 Carnivorous
-// All rights reserved.
-//
-// Mouse Injector is free software; you can redistribute it and/or modify it
-// under the terms of the GNU General Public License as published by the Free
-// Software Foundation; either version 2 of the License, or (at your option)
-// any later version.
-//
-// This program is distributed in the hope that it will be useful, but
-// WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-// or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
-// for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, visit http://www.gnu.org/licenses/gpl-2.0.html
+// Linux port (C) 2024
 //==========================================================================
+#ifndef MAIN_H
+#define MAIN_H
+
 #include <string.h>
+#include <stdint.h>
 
 #define DOLPHINVERSION "Dolphin"
-#define BUILDINFO "(v0.31 - "__DATE__")"
-#define LINE "__________________________________________________________________"
-// input for interface
-#define K_1 GetAsyncKeyState(0x31) // key '1'
-#define K_2 GetAsyncKeyState(0x32) // key '2'
-#define K_3 GetAsyncKeyState(0x33) // key '3'
-#define K_4 GetAsyncKeyState(0x34) // key '4'
-#define K_5 GetAsyncKeyState(0x35) // key '5'
-#define K_6 GetAsyncKeyState(0x36) // key '6'
-#define K_7 GetAsyncKeyState(0x37) // key '7'
-#define K_8 GetAsyncKeyState(0x38) // key '8'
-#define K_CTRL0 (GetAsyncKeyState(0x11) && GetAsyncKeyState(0x30) || GetAsyncKeyState(0x30) && GetAsyncKeyState(0x11)) // key combo control + '0'
-#define K_CTRL1 (GetAsyncKeyState(0x11) && GetAsyncKeyState(0x31) || GetAsyncKeyState(0x31) && GetAsyncKeyState(0x11)) // key combo control + '1'
-#define K_PLUS (GetAsyncKeyState(0x6B) || GetAsyncKeyState(0xBB)) // key '+'
-#define K_MINUS (GetAsyncKeyState(0x6D) || GetAsyncKeyState(0xBD)) // key '-'
-#define K_INSERT GetAsyncKeyState(0x2D) // key 'Insert'
-#if _MSC_VER && !__INTEL_COMPILER // here because some MSVC versions only support __inline :/
-#define inline __inline
-#endif
+#define BUILDINFO      "(v0.31-linux - " __DATE__ ")"
+#define LINE           "__________________________________________________________________"
 
-inline float ClampFloat(const float value, const float min, const float max)
+/* ------------------------------------------------------------------
+ * Keyboard polling using XQueryKeymap (global, no focus requirement).
+ * Falls back to a simple stdin buffer when X11 is unavailable.
+ * ------------------------------------------------------------------ */
+void KEY_Update(void);   /* call once per frame to refresh state  */
+int  KEY_Down(int keysym_or_ascii); /* returns 1 if key is currently held  */
+int  KEY_Pressed(int keysym_or_ascii); /* edge: true once per keypress */
+void KEY_Clear(void);    /* consume all pending key events */
+
+/* Key identifiers (use ASCII for printable keys, extras below) */
+#define KEY_INSERT  0x100
+#define KEY_CTRL    0x101
+
+/* Macros mirroring the original GetAsyncKeyState macros */
+#define K_1      KEY_Pressed('1')
+#define K_2      KEY_Pressed('2')
+#define K_3      KEY_Pressed('3')
+#define K_4      KEY_Pressed('4')
+#define K_5      KEY_Pressed('5')
+#define K_6      KEY_Pressed('6')
+#define K_7      KEY_Pressed('7')
+#define K_8      KEY_Pressed('8')
+/* CTRL+0 / CTRL+1 → just '0' / '1' on Linux (terminals don't send Ctrl+digit) */
+#define K_CTRL0  KEY_Pressed('0')
+#define K_CTRL1  KEY_Pressed('1')
+#define K_PLUS   (KEY_Pressed('+') || KEY_Pressed('='))
+#define K_MINUS  KEY_Pressed('-')
+/* INSERT → 'i' on keyboard (terminal Insert sends \033[2~ – handled in KEY_Update) */
+#define K_INSERT KEY_Pressed(KEY_INSERT)
+
+/* Millisecond sleep */
+void Sleep(unsigned int ms);
+
+/* Console helpers */
+void SetConsoleTitle(const char *title);
+
+/* Utility */
+static inline float ClampFloat(const float value, const float min, const float max)
 {
-	const float test = value < min ? min : value;
-	return test > max ? max : test;
+    const float test = value < min ? min : value;
+    return test > max ? max : test;
 }
-
-inline int32_t ClampInt(const int32_t value, const int32_t min, const int32_t max)
+static inline int32_t ClampInt(const int32_t value, const int32_t min, const int32_t max)
 {
-	const int32_t test = value < min ? min : value;
-	return test > max ? max : test;
+    const int32_t test = value < min ? min : value;
+    return test > max ? max : test;
 }
-
-inline uint16_t ClampHalfword(const uint16_t value, const uint16_t min, const uint16_t max)
+static inline uint16_t ClampHalfword(const uint16_t value, const uint16_t min, const uint16_t max)
 {
-	const int16_t test = value < min ? min : value;
-	return test > max ? max : test;
+    const int16_t test = (int16_t)(value < min ? min : value);
+    return (uint16_t)(test > (int16_t)max ? (int16_t)max : test);
 }
-
-inline uint8_t FloatsEqual(const float f1, const float f2)
+static inline uint8_t FloatsEqual(const float f1, const float f2)
 {
-	const float epsilon = 0.0001;
-	return (f1 - f2) < epsilon;
+    const float epsilon = 0.0001f;
+    return (f1 - f2) < epsilon;
 }
 
 extern void AccumulateAddRemainder(float *value, float *accumulator, float dir, float dx);
@@ -70,13 +78,16 @@ extern uint8_t sensitivity;
 extern uint8_t crosshair;
 extern uint8_t invertpitch;
 extern uint8_t optionToggle;
-extern float out;
-extern float out2;
-extern float out3;
-extern float preSinOut;
-extern float preCosOut;
-extern float totalAngleOut;
+extern float   out;
+extern float   out2;
+extern float   out3;
+extern float   preSinOut;
+extern float   preCosOut;
+extern float   totalAngleOut;
 extern uint32_t uIntOut1;
 extern uint32_t uIntOut2;
-extern char titleOut[256];
+extern char    titleOut[256];
 extern uint64_t emuoffsetOut;
+extern int     isHooked;
+
+#endif /* MAIN_H */
