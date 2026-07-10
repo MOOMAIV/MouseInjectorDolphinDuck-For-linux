@@ -7,7 +7,7 @@ This was made with ai and has had very very little work done on it by me, so if 
 
 ## How to Use
 1. Start emulator first
-2. Start MouseInjector, read initial information then press ctrl+1
+2. Right click MouseInjector and click run "Konsole/terminal" , read initial information then press ctrl+1
 3. Make sure game is running, move the terminal over the emulator and press '4' to hook into the process, then alt tab to focus the emulator.
     1. If game is supported then the mouse will be captured at the position it was at when hooked
         * You will be <b><u>unable</u></b> to use the mouse elsewhere while it is hooked, focus the terminal then press 4 to unhook
