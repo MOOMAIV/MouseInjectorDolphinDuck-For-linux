@@ -1,7 +1,5 @@
 # MouseInjector Linux Port
 
-A Linux port i made with claude of [MouseInjectorDolphinDuck](https://github.com/Altureus/MouseInjectorDolphinDuck) 
-
 ## Disclaimer
 This was made with ai and has had very very little work done on it by me, so if you find anything goofy or out of place thats why.
 
