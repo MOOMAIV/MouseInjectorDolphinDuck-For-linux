@@ -71,10 +71,6 @@ The evdev backend reads raw events from `/dev/input/event*`. Most modern distros
 sudo usermod -aG input $USER
 ```
 
-Or test immediately with:
-```bash
-sudo ./mouseinjector
-```
 
 ## Known limitations
 
