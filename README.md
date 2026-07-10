@@ -18,6 +18,9 @@ This was made with ai and has had very very little work done on it by me, so if 
  
 ## Emulators
 
+ All supported game titles are the same as the upstream project. See  [GAMES.MD](/GAMES.md) for the full list.
+
+
 | Emulator       | Process name(s)                      | Notes                         |
 |----------------|--------------------------------------|-------------------------------|
 | Dolphin        | `dolphin-emu`, `dolphin-emu-qt`      | GC/Wii                        |
@@ -30,7 +33,6 @@ This was made with ai and has had very very little work done on it by me, so if 
 
 
 
-> All supported game titles are the same as the upstream project. See the upstream GAMES.md for the full list.
 
 ## Building
 
