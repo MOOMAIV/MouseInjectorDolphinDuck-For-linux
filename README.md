@@ -1,11 +1,12 @@
 # MouseInjector Linux Port
 
 ## Disclaimer
-This was made with ai and has had very very little work done on it by me, so if you find anything goofy or out of place thats why.
+This was made with ai and has had very very little work done on it by me, so if you find anything goofy or out of place thats why. 
+Also sourced is messed up right now, i need to figure out what i missed, it wont work properly with button presses.
 
 ## How to Use
 1. Start emulator first
-2. Right click MouseInjector and click run in "Konsole/terminal" , read initial information then press ctrl+1
+2. Make sure to give permisions for it to be executable then, right click mouseinjector and click run in "Konsole/terminal" or type "./mouseinjector",
 3. Make sure game is running, move the terminal over the emulator and press '4' to hook into the process, then alt tab to focus the emulator.
     1. If game is supported then the mouse will be captured at the position it was at when hooked
         * You will be <b><u>unable</u></b> to use the mouse elsewhere while it is hooked, focus the terminal then press 4 to unhook
@@ -21,7 +22,7 @@ This was made with ai and has had very very little work done on it by me, so if 
 
 | Emulator       | Process name(s)                      | Notes                         |
 |----------------|--------------------------------------|-------------------------------|
-| Dolphin        | `dolphin-emu`, `dolphin-emu-qt`      | GC/Wii                        |
+| Dolphin        | `dolphin-emu`, `dolphin-emu-qt`      | Working                       |
 | DuckStation    | `duckstation-qt`, `duckstation-nogui`| Does not work                 |
 | PCSX2          | `pcsx2`, `pcsx2-qt`, `PCSX2`         | Cant find games               |
 | RetroArch      | `retroarch`                          | Untested                      |
