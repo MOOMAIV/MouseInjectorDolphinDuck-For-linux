@@ -2,7 +2,7 @@
 
 ## Disclaimer
 This was made with ai and has had very very little work done on it by me, so if you find anything goofy or out of place thats why. 
-Also sourced is messed up right now, i need to figure out what i missed, it wont work properly with button presses.
+- Also source is messed up right now, i need to figure out what i missed, it wont work properly with button presses.
 
 ## How to Use
 1. Start emulator first
